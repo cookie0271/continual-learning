@@ -27,6 +27,7 @@ def get_param_stamp_from_args(args, no_boundaries=False):
     config = get_context_set(
         name=args.experiment, scenario=args.scenario, contexts=args.contexts, data_dir=args.d_dir, only_config=True,
         normalize=checkattr(args, "normalize"), verbose=False, singlehead=checkattr(args, 'singlehead'),
+        adversarial_label_shuffle=checkattr(args, 'adversarial_label_shuffle'),
     )
 
     # -get feature extractor architecture (if used)
@@ -68,9 +69,11 @@ def get_param_stamp(args, model_name, verbose=True, replay_model_name=None, feat
     stream_stamp = "-{stream}{fuzz}".format(
         stream=args.stream, fuzz="{}-".format(args.fuzziness) if args.stream=="fuzzy-boundaries" else "-"
     ) if no_boundaries else ""
-    problem_stamp = "{exp}{stream}{norm}{aug}{multi_n}".format(
+    problem_stamp = "{exp}{stream}{norm}{aug}{adv}{multi_n}".format(
         exp=args.experiment, stream=stream_stamp, norm="-N" if hasattr(args, 'normalize') and args.normalize else "",
-        aug="+" if hasattr(args, "augment") and args.augment else "", multi_n=multi_n_stamp
+        aug="+" if hasattr(args, "augment") and args.augment else "",
+        adv="-AdvShuf" if checkattr(args, 'adversarial_label_shuffle') else "",
+        multi_n=multi_n_stamp,
     )
     if verbose:
         print(" --> problem:       "+problem_stamp)

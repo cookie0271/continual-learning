@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+import copy
+import json
 import os
+import re
 import numpy as np
 import time
 import torch
@@ -20,6 +23,31 @@ from params.param_values import set_method_options,check_for_errors,set_default_
 from eval import evaluate, callbacks as cb
 
 
+def _write_seed_summary(results, result_dir):
+    if not results:
+        return None
+    first_stamp = results[0]['param_stamp']
+    base_stamp = re.sub(r'-s\d+$', '', first_stamp)
+    summary_name = f"seed-summary-{base_stamp}-n{len(results)}.txt"
+    summary_path = os.path.join(result_dir, summary_name)
+
+    overall_average = sum(item['average'] for item in results) / len(results)
+
+    with open(summary_path, 'w') as summary_file:
+        for item in results:
+            summary_file.write(
+                f"Seed {item['seed']} (param_stamp: {item['param_stamp']})\n"
+            )
+            for context_idx, acc in enumerate(item['accuracies'], 1):
+                summary_file.write(f"Context {context_idx}\t{acc:.6f}\n")
+            summary_file.write(f"Average\t{item['average']:.6f}\n\n")
+        summary_file.write(
+            f"Overall average accuracy across seeds\t{overall_average:.6f}\n"
+        )
+
+    return summary_path
+
+
 ## Function for specifying input-options and organizing / checking them
 def handle_inputs():
     # Set indicator-dictionary for correctly retrieving / checking input options
@@ -28,7 +56,7 @@ def handle_inputs():
     parser = options.define_args(filename="main_task_free",
                                  description='Run a "task-free" continual learning experiment '
                                              '(i.e., no [known,] sharp boundaries between contexts).')
-    parser = options.add_general_options(parser, **kwargs)
+    parser = options.add_general_options(parser, include_seed_count=True, **kwargs)
     parser = options.add_eval_options(parser, **kwargs)
     parser = options.add_problem_options(parser, **kwargs)
     parser = options.add_model_options(parser, **kwargs)
@@ -94,7 +122,8 @@ def run(args, verbose=False):
     (train_datasets, test_datasets), config = get_context_set(
         name=args.experiment, scenario=args.scenario, contexts=args.contexts, data_dir=args.d_dir,
         normalize=checkattr(args, "normalize"), verbose=verbose, exception=(args.seed==0),
-        singlehead=checkattr(args, 'singlehead')
+        singlehead=checkattr(args, 'singlehead'),
+        adversarial_label_shuffle=checkattr(args, 'adversarial_label_shuffle')
     )
 
     #-------------------------------------------------------------------------------------------------#
@@ -300,6 +329,18 @@ def run(args, verbose=False):
         verbose=verbose, no_boundaries=True,
     )
 
+    if checkattr(args, 'adversarial_label_shuffle') and config.get('label_permutations'):
+        shuffle_path = os.path.join(args.r_dir, f"label-shuffle-{param_stamp}.json")
+        shuffle_payload = {
+            'scenario': args.scenario,
+            'strategy': config.get('label_shuffle_strategy'),
+            'contexts': config['label_permutations'],
+        }
+        with open(shuffle_path, 'w') as shuffle_file:
+            json.dump(shuffle_payload, shuffle_file, indent=2)
+        if verbose:
+            print(f"Saved adversarial label permutations to {shuffle_path}")
+
     #-------------------------------------------------------------------------------------------------#
 
     #---------------------#
@@ -410,8 +451,40 @@ def run(args, verbose=False):
 
 
 
+    return {
+        'seed': args.seed,
+        'param_stamp': param_stamp,
+        'accuracies': accs,
+        'average': average_accs,
+    }
+
+
 if __name__ == '__main__':
     # -load input-arguments
     args = handle_inputs()
-    # -run experiment
-    run(args, verbose=True)
+    # -run experiment (optionally across multiple seeds)
+    requested_seed_count = getattr(args, 'seed_count', 1)
+    seed_count = max(1, requested_seed_count)
+    seed_values = list(range(args.seed, args.seed + seed_count))
+    multi_results = []
+
+    for run_index, seed_value in enumerate(seed_values, 1):
+        run_args = copy.deepcopy(args)
+        run_args.seed = seed_value
+        if seed_count > 1:
+            print("\n" + " RUN {} / {} -- seed {} ".format(run_index, seed_count, seed_value).center(70, '='))
+        result = run(run_args, verbose=True)
+        multi_results.append(result)
+
+    if seed_count > 1 and multi_results:
+        summary_path = _write_seed_summary(multi_results, args.r_dir)
+        print("\n" + " MULTI-SEED SUMMARY ".center(70, '='))
+        for result in multi_results:
+            print(f"Seed {result['seed']} (param_stamp: {result['param_stamp']})")
+            for context_idx, acc in enumerate(result['accuracies'], 1):
+                print(f" - Context {context_idx}: {acc:.4f}")
+            print(f" => Average accuracy: {result['average']:.4f}\n")
+        overall_average = sum(item['average'] for item in multi_results) / len(multi_results)
+        print(f"Overall average accuracy across {len(multi_results)} seeds: {overall_average:.4f}")
+        if summary_path:
+            print(f"Summary saved to {summary_path}")
