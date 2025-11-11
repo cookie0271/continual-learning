@@ -477,5 +477,6 @@ class Classifier(ContinualLearner, MemoryBuffer):
             'distil_r': sum(distilL_r).item() / n_replays if (x_ is not None and distilL_r[0] is not None) else 0,
             'param_reg': weight_penalty_loss.item() if weight_penalty_loss is not None else 0,
             'accuracy': accuracy if accuracy is not None else 0.,
+            'lambda_t': getattr(self, 'lambda_t', 0.0),
         }
 
