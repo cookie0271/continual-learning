@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import os
+import copy
+import re
 import numpy as np
 import time
 import torch
@@ -19,10 +21,32 @@ from params.param_values import set_method_options,check_for_errors,set_default_
 from eval import evaluate, callbacks as cb
 from visual import visual_plt
 from visual import visual_plt
-import os
+import json
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
+def _write_seed_summary(results, result_dir):
+    if not results:
+        return None
+    first_stamp = results[0]['param_stamp']
+    base_stamp = re.sub(r'-s\d+$', '', first_stamp)
+    summary_name = f"seed-summary-{base_stamp}-n{len(results)}.txt"
+    summary_path = os.path.join(result_dir, summary_name)
 
+    overall_average = sum(item['average'] for item in results) / len(results)
+
+    with open(summary_path, 'w') as summary_file:
+        for item in results:
+            summary_file.write(
+                f"Seed {item['seed']} (param_stamp: {item['param_stamp']})\n"
+            )
+            for context_idx, acc in enumerate(item['accuracies'], 1):
+                summary_file.write(f"Context {context_idx}\t{acc:.6f}\n")
+            summary_file.write(f"Average\t{item['average']:.6f}\n\n")
+        summary_file.write(
+            f"Overall average accuracy across seeds\t{overall_average:.6f}\n"
+        )
+
+    return summary_path
 
 ## Function for specifying input-options and organizing / checking them
 def handle_inputs():
@@ -31,7 +55,7 @@ def handle_inputs():
     # Define input options
     parser = options.define_args(filename="main", description='Run an individual continual learning experiment '
                                                               'using the "academic continual learning setting".')
-    parser = options.add_general_options(parser, **kwargs)
+    parser = options.add_general_options(parser, include_seed_count=True, **kwargs)
     parser = options.add_eval_options(parser, **kwargs)
     parser = options.add_problem_options(parser, **kwargs)
     parser = options.add_model_options(parser, **kwargs)
@@ -121,7 +145,8 @@ def run(args, verbose=False):
     (train_datasets, test_datasets), config = get_context_set(
         name=args.experiment, scenario=args.scenario, contexts=args.contexts, data_dir=args.d_dir,
         normalize=checkattr(args, "normalize"), verbose=verbose, exception=(args.seed==0),
-        singlehead=checkattr(args, 'singlehead'), train_set_per_class=checkattr(args, 'gen_classifier')
+        singlehead=checkattr(args, 'singlehead'), train_set_per_class=checkattr(args, 'gen_classifier'),
+        adversarial_label_shuffle = checkattr(args, 'adversarial_label_shuffle')
     )
     # The experiments in this script follow the academic continual learning setting,
     # the above lines of code therefore load both the 'context set' and the 'data stream'
@@ -391,6 +416,18 @@ def run(args, verbose=False):
         feature_extractor_name= feature_extractor.name if (feature_extractor is not None) else None, verbose=verbose,
     )
 
+    if checkattr(args, 'adversarial_label_shuffle') and config.get('label_permutations'):
+        shuffle_path = os.path.join(args.r_dir, f"label-shuffle-{param_stamp}.json")
+        shuffle_payload = {
+            'scenario': args.scenario,
+            'strategy': config.get('label_shuffle_strategy'),
+            'contexts': config['label_permutations'],
+        }
+        with open(shuffle_path, 'w') as shuffle_file:
+            json.dump(shuffle_payload, shuffle_file, indent=2)
+        if verbose:
+            print(f"Saved adversarial label permutations to {shuffle_path}")
+
     #-------------------------------------------------------------------------------------------------#
 
     #---------------------#
@@ -460,9 +497,17 @@ def run(args, verbose=False):
         if verbose:
             print('\n\n' + ' TRAINING '.center(70, '*'))
 
+        track_resources = hasattr(args, "track_resources") and args.track_resources
+        track_time = args.time or track_resources
+
         # 如果命令行请求计时，则记录当前时间
-        if args.time:
-            start = time.time()
+        start = time.time() if track_time else None
+
+        # 如果需要跟踪显存，重置峰值显存统计
+        if track_resources and cuda:
+            torch.cuda.reset_peak_memory_stats(device)
+        elif track_resources and verbose and (not cuda):
+            print("Requested GPU memory tracking, but CUDA is not available.")
 
         # 3. 统一的训练函数调用
         train_fn = train_fromp if checkattr(args, 'fromp') else (
@@ -477,13 +522,24 @@ def run(args, verbose=False):
         )
 
         # 4. 如果请求了计时，并且 start_time 已被成功记录，则计算总时长
-        if args.time:
+        if start is not None:
             training_time = time.time() - start
-            time_file = open("{}/time-{}.txt".format(args.r_dir, param_stamp), 'w')
-            time_file.write('{}\n'.format(training_time))
-            time_file.close()
+            if track_time:
+                time_file = open("{}/time-{}.txt".format(args.r_dir, param_stamp), 'w')
+                time_file.write('{}\n'.format(training_time))
+                time_file.close()
             if verbose:
                 print("Total training time = {:.1f} seconds\n".format(training_time))
+
+            # 5. 如果请求跟踪显存并且使用了 CUDA，则写入峰值显存
+        if track_resources and cuda:
+            peak_memory = torch.cuda.max_memory_allocated(device)
+            memory_file = open("{}/memory-{}.txt".format(args.r_dir, param_stamp), 'w')
+            memory_file.write('{}\n'.format(peak_memory))
+            memory_file.close()
+            if verbose:
+                peak_mb = peak_memory / (1024 ** 2)
+                print("Peak GPU memory during training = {:.1f} MB".format(peak_mb))
 
         # 5. 保存模型
         if args.save:
@@ -501,6 +557,15 @@ def run(args, verbose=False):
                 not hasattr(args, 'full_ltag') or args.full_ltag == "none"
         ) else "{}-{}".format(model.name, args.full_ltag)
         utils.load_checkpoint(model, args.m_dir, name=load_name, verbose=verbose, strict=False)
+
+    # Persist per-task statistics of adaptive regularization (if available)
+    if getattr(model, 'use_adaptive', False) and hasattr(model, 'lambda_task_averages'):
+        lambda_path = os.path.join(args.r_dir, f"lambda-{param_stamp}.txt")
+        with open(lambda_path, 'w') as lambda_file:
+            for context_idx, avg_lambda in enumerate(model.lambda_task_averages, 1):
+                lambda_file.write(f"{context_idx}\t{avg_lambda}\n")
+        if verbose:
+            print(f"Saved per-task average lambda values to {lambda_path}")
 
     #----------------------#
     #----- EVALUATION -----#
@@ -585,11 +650,40 @@ def run(args, verbose=False):
         # -print name of generated plot on screen
         if verbose:
             print("\nGenerated plot: {}\n".format(plot_name))
-
+    return {
+        'seed': args.seed,
+        'param_stamp': param_stamp,
+        'accuracies': accs,
+        'average': average_accs,
+    }
 
 
 if __name__ == '__main__':
     # -load input-arguments
     args = handle_inputs()
-    # -run experiment
-    run(args, verbose=True)
+    # -run experiment (optionally across multiple seeds)
+    requested_seed_count = getattr(args, 'seed_count', 1)
+    seed_count = max(1, requested_seed_count)
+    seed_values = list(range(args.seed, args.seed + seed_count))
+    multi_results = []
+
+    for run_index, seed_value in enumerate(seed_values, 1):
+        run_args = copy.deepcopy(args)
+        run_args.seed = seed_value
+        if seed_count > 1:
+            print("\n" + " RUN {} / {} -- seed {} ".format(run_index, seed_count, seed_value).center(70, '='))
+        result = run(run_args, verbose=True)
+        multi_results.append(result)
+
+    if seed_count > 1 and multi_results:
+        summary_path = _write_seed_summary(multi_results, args.r_dir)
+        print("\n" + " MULTI-SEED SUMMARY ".center(70, '='))
+        for result in multi_results:
+            print(f"Seed {result['seed']} (param_stamp: {result['param_stamp']})")
+            for context_idx, acc in enumerate(result['accuracies'], 1):
+                print(f" - Context {context_idx}: {acc:.4f}")
+            print(f" => Average accuracy: {result['average']:.4f}\n")
+        overall_average = sum(item['average'] for item in multi_results) / len(multi_results)
+        print(f"Overall average accuracy across {len(multi_results)} seeds: {overall_average:.4f}")
+        if summary_path:
+            print(f"Summary saved to {summary_path}")
