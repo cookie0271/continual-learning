@@ -56,11 +56,15 @@ def get_singlecontext_datasets(name, data_dir="./store/datasets", normalize=Fals
 #----------------------------------------------------------------------------------------------------------#
 
 def get_context_set(name, scenario, contexts, data_dir="./datasets", only_config=False, verbose=False,
-                    exception=False, normalize=False, augment=False, singlehead=False, train_set_per_class=False):
+                    exception=False, normalize=False, augment=False, singlehead=False,
+                    train_set_per_class=False, adversarial_label_shuffle=False):
     '''Load, organize and return a context set (both train- and test-data) for the requested experiment.
 
     [exception]:    <bool>; if True, for visualization no permutation is applied to first context (permMNIST) or digits
-                            are not shuffled before being distributed over the contexts (e.g., splitMNIST, CIFAR100)'''
+                            are not shuffled before being distributed over the contexts (e.g., splitMNIST, CIFAR100)
+    [adversarial_label_shuffle]:
+                    <bool>; if True, shuffle labels within each context (tasks 2..T) to create adversarial label
+                            mappings while keeping them consistent between train and test datasets'''
 
     ## NOTE: options 'normalize' and 'augment' only implemented for CIFAR-based experiments.
 
@@ -78,11 +82,17 @@ def get_context_set(name, scenario, contexts, data_dir="./datasets", only_config
     else:
         raise ValueError('Given undefined experiment: {}'.format(name))
 
+    if adversarial_label_shuffle and name != "CIFAR100":
+        raise ValueError("Adversarial label shuffle is currently only supported for 'CIFAR100'.")
+    if adversarial_label_shuffle and train_set_per_class:
+        raise NotImplementedError('Adversarial label shuffle is not supported with train_set_per_class=True.')
+
     # Get config-dict
     config = DATASET_CONFIGS[data_type].copy()
     config['normalize'] = normalize if name=='CIFAR100' else False
     if config['normalize']:
         config['denormalize'] = AVAILABLE_TRANSFORMS["CIFAR100_denorm"]
+    config['adversarial_label_shuffle'] = adversarial_label_shuffle
     # check for number of contexts
     if contexts > config['classes'] and not name=="permMNIST":
         raise ValueError("Experiment '{}' cannot have more than {} contexts!".format(name, config['classes']))
@@ -94,6 +104,9 @@ def get_context_set(name, scenario, contexts, data_dir="./datasets", only_config
     # -if only config-dict is needed, return it
     if only_config:
         return config
+
+    label_permutation_summary = None
+    label_shuffle_strategy = None
 
     # Depending on experiment, get and organize the datasets
     if name == 'permMNIST':
@@ -132,24 +145,79 @@ def get_context_set(name, scenario, contexts, data_dir="./datasets", only_config
                               augment=augment, normalize=normalize)
         # generate labels-per-dataset (if requested, training data is split up per class rather than per context)
         labels_per_dataset_train = [[label] for label in range(classes)] if train_set_per_class else [
-            list(np.array(range(classes_per_context))+classes_per_context*context_id) for context_id in range(contexts)
+            list(np.array(range(classes_per_context)) + classes_per_context * context_id)
+            for context_id in range(contexts)
         ]
         labels_per_dataset_test = [
-            list(np.array(range(classes_per_context))+classes_per_context*context_id) for context_id in range(contexts)
+            list(np.array(range(classes_per_context)) + classes_per_context * context_id)
+            for context_id in range(contexts)
         ]
+
+        # pre-compute label permutations per context (identity for task 1)
+        label_shuffle_mappings = []
+        label_permutation_summary = []
+        if adversarial_label_shuffle:
+            label_shuffle_strategy = (
+                'reuse-previous-classes' if scenario == 'class' else 'within-context'
+            )
+        previous_label_pool = []
+        for context_id, labels in enumerate(labels_per_dataset_test):
+            labels_int = [int(l) for l in labels]
+            source_pool = None
+            if adversarial_label_shuffle and context_id > 0:
+                if scenario == 'class':
+                    source_pool = list(previous_label_pool)
+                    if len(source_pool) < len(labels_int):
+                        raise ValueError(
+                            'Not enough previously seen classes to construct adversarial shuffle.'
+                        )
+                    permuted_labels = list(
+                        np.random.choice(source_pool, size=len(labels_int), replace=False)
+                    )
+                else:
+                    permuted_indices = np.random.permutation(len(labels_int))
+                    permuted_labels = [int(labels_int[idx]) for idx in permuted_indices]
+            else:
+                permuted_labels = [int(l) for l in labels_int]
+            mapping = {int(label): int(permuted_labels[idx]) for idx, label in enumerate(labels_int)}
+            label_shuffle_mappings.append(mapping)
+            summary_entry = {
+                'context': context_id + 1,
+                'original': labels_int,
+                'permuted': permuted_labels,
+            }
+            if source_pool is not None:
+                summary_entry['source_pool'] = source_pool
+            label_permutation_summary.append(summary_entry)
+            previous_label_pool.extend(labels_int)
+
+        def _make_target_transform(labels, mapping, context_index):
+            offset = int(labels[0])
+            apply_shuffle = adversarial_label_shuffle and context_index > 0
+            if scenario == 'domain' or (scenario == "task" and singlehead):
+                return lambda y, mapping=mapping, offset=offset: int(mapping.get(int(y), int(y)) - offset)
+            elif apply_shuffle:
+                return lambda y, mapping=mapping: int(mapping.get(int(y), int(y)))
+            else:
+                return None
+
         # split the train and test datasets up into sub-datasets
         train_datasets = []
         for labels in labels_per_dataset_train:
-            target_transform = transforms.Lambda(lambda y, x=labels[0]: y-x) if (
-                    scenario=='domain' or (scenario=='task' and singlehead)
-            ) else None
+            first_label = int(labels[0])
+            context_index = int(first_label // classes_per_context) if classes_per_context > 0 else 0
+            context_index = max(0, min(context_index, len(label_shuffle_mappings) - 1))
+            mapping = label_shuffle_mappings[context_index]
+            target_transform = _make_target_transform(labels, mapping, context_index)
             train_datasets.append(SubDataset(trainset, labels, target_transform=target_transform))
         test_datasets = []
-        for labels in labels_per_dataset_test:
-            target_transform = transforms.Lambda(lambda y, x=labels[0]: y-x) if (
-                    scenario=='domain' or (scenario=='task' and singlehead)
-            ) else None
+        for context_index, labels in enumerate(labels_per_dataset_test):
+            mapping = label_shuffle_mappings[context_index]
+            target_transform = _make_target_transform(labels, mapping, context_index)
             test_datasets.append(SubDataset(testset, labels, target_transform=target_transform))
+
+    config['label_permutations'] = label_permutation_summary
+    config['label_shuffle_strategy'] = label_shuffle_strategy
 
     # Return tuple of train- and test-dataset, config-dictionary and number of classes per context
     return ((train_datasets, test_datasets), config)
