@@ -133,7 +133,7 @@ if __name__ == '__main__':
             EWC[ewc_lambda] = get_result(args)
         args.weight_penalty = False
         args.offline = False
-
+    '''
      # ======== 🚀 rwalk + Adaptive (坐标上升法) ========
     if not utils.checkattr(args, 'no_ada'):
         print("\n\n" + "="*80)
@@ -180,7 +180,7 @@ if __name__ == '__main__':
         args.weight_penalty = False
         args.use_adaptive = False
         args.offline = False
-
+    '''
     ## SI
     if not utils.checkattr(args, 'no_reg'):
         SI = {}
@@ -190,7 +190,7 @@ if __name__ == '__main__':
             args.reg_strength = si_c
             SI[si_c] = get_result(args)
         args.weight_penalty = False
-    '''
+
     # ======== 🚀 SI + Adaptive (坐标上升法) ========
     if not utils.checkattr(args, 'no_ada'):
         print("\n\n" + "=" * 80)
@@ -234,7 +234,7 @@ if __name__ == '__main__':
 
         args.weight_penalty = False
         args.use_adaptive = False
-    '''
+
     ## FROMP
     if not utils.checkattr(args, 'no_fromp'):
         FROMP = {}
@@ -288,7 +288,7 @@ if __name__ == '__main__':
         print(" param-list (lambda): {}".format(ext_lambda_list))
         print("  {}".format(ave_acc_ewc))
         print("--->  lambda = {}     --    {}".format(ext_lambda_list[np.argmax(ave_acc_ewc)], np.max(ave_acc_ewc)))
-
+    '''
     # ======== 🚀 rwalk + Adaptive (打印结果) ========
     if not utils.checkattr(args, 'no_ada'):
         print("\n\nrwalk + ADAPTIVE (步骤 1: 寻找 lambda)")
@@ -302,7 +302,7 @@ if __name__ == '__main__':
         print(" param-list (scaling_power): {}".format(list(rwalk_adaptive_step2_results.keys())))
         print("  {}".format(list(rwalk_adaptive_step2_results.values())))
         print("---> best scaling_power = {}  --  {}".format(best_scaling_power_rwalk, final_best_acc_rwalk))
-
+    '''
 
     ###---SI---###
     if not utils.checkattr(args, 'no_reg'):
@@ -311,7 +311,7 @@ if __name__ == '__main__':
         print(" param list (si_c): {}".format(ext_c_list))
         print("  {}".format(ave_acc_si))
         print("---> si_c = {}     --    {}".format(ext_c_list[np.argmax(ave_acc_si)], np.max(ave_acc_si)))
-    '''
+
     # ======== 🚀 SI + Adaptive (打印结果) ========
     if not utils.checkattr(args, 'no_ada'):
         print("\n\nSYNAPTIC INTELLIGENCE + ADAPTIVE (步骤 1: 寻找 lambda_0)")
@@ -326,7 +326,7 @@ if __name__ == '__main__':
         print(" param-list (scaling_power): {}".format(list(si_adaptive_step2_results.keys())))
         print("  {}".format(list(si_adaptive_step2_results.values())))
         print("---> best scaling_power = {}  --  {}".format(best_scaling_power_si, final_best_acc_si))
-    '''
+
     ###---FROMP---###
     if not utils.checkattr(args, 'no_fromp'):
         ave_acc_fromp_per_budget = []
@@ -373,10 +373,10 @@ if __name__ == '__main__':
     if args.scenario == "task" and not utils.checkattr(args, 'no_xdg'):
         full_list += ave_acc_xdg
     if not utils.checkattr(args, 'no_ada'):
-        full_list += list(rwalk_adaptive_step1_results.values())
-        full_list += list(rwalk_adaptive_step2_results.values())
-        #full_list += list(si_adaptive_step1_results.values())
-        #full_list += list(si_adaptive_step2_results.values())
+        #full_list += list(rwalk_adaptive_step1_results.values())
+        #full_list += list(rwalk_adaptive_step2_results.values())
+        full_list += list(si_adaptive_step1_results.values())
+        full_list += list(si_adaptive_step2_results.values())
     miny = np.min(full_list)
     maxy = np.max(full_list)
     marginy = 0.1 * (maxy - miny)
@@ -402,7 +402,7 @@ if __name__ == '__main__':
                                    with_dots=True, ylim=ylim, h_line=BASE, h_label="None")
         figure_list.append(figure)
 
-
+    '''
      # ======== 🚀 rwalk + Adaptive (绘图) ========
     if not utils.checkattr(args, 'no_ada'):
         # 图1: 寻找 lambda
@@ -418,7 +418,7 @@ if __name__ == '__main__':
                                    colors=["teal"], title=title, x_log=False, xlabel="rwalk+Adaptive: scaling_power",
                                    with_dots=True, ylim=ylim, h_line=BASE, h_label="None")
         figure_list.append(figure)
-
+    '''
 
     ###---SI---###
     if not utils.checkattr(args, 'no_reg'):
@@ -426,7 +426,7 @@ if __name__ == '__main__':
                                    colors=["yellowgreen"], title=title, x_log=True, xlabel="SI: c (log-scale)",
                                    with_dots=True, ylim=ylim, h_line=BASE, h_label="None")
         figure_list.append(figure)
-    '''
+
     # ======== 🚀 SI + Adaptive (绘图) ========
     if not utils.checkattr(args, 'no_ada'):
         # 图1: 寻找 lambda_0
@@ -444,7 +444,7 @@ if __name__ == '__main__':
                                    colors=["gold"], title=title, x_log=False, xlabel="SI+Adaptive: scaling_power",
                                    with_dots=True, ylim=ylim, h_line=BASE, h_label="None")
         figure_list.append(figure)
-    '''
+
     ###---FROMP---###
     if not utils.checkattr(args, 'no_fromp'):
         colors = get_cmap('YlOrBr')(np.linspace(1.0, 0.5, len(budget_list))).tolist()
