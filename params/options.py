@@ -15,10 +15,17 @@ def define_args(filename, description):
     parser = argparse.ArgumentParser('./{}.py'.format(filename), description=description)
     return parser
 
-def add_general_options(parser, main=False, comparison=False, compare_hyper=False, pretrain=False, **kwargs):
+def add_general_options(parser, main=False, comparison=False, compare_hyper=False, pretrain=False,include_seed_count=False, **kwargs):
     if main:
         parser.add_argument('--get-stamp', action='store_true', help='print param-stamp & exit')
     parser.add_argument('--seed', type=int, default=0, help='[first] random seed (for each random-module used)')
+    if include_seed_count:
+        parser.add_argument(
+            '--seed-count',
+            type=int,
+            default=1,
+            help='number of sequential seeds to run starting at "--seed" (default: 1)',
+        )
     if comparison and (not compare_hyper):
         parser.add_argument('--n-seeds', type=int, default=1, help='how often to repeat?')
     parser.add_argument('--no-gpus', action='store_false', dest='gpu', help="don't use GPUs")
@@ -49,6 +56,8 @@ def add_eval_options(parser, main=False, comparison=False, pretrain=False, compa
     eval_params = parser.add_argument_group('Evaluation Parameters')
     if not pretrain:
         eval_params.add_argument('--time', action='store_true', help="keep track of total training time")
+        eval_params.add_argument('--track-resources', action='store_true',
+                                 help="record training time and peak GPU memory usage")
     if main:
         eval_params.add_argument('--pdf', action='store_true', help="generate pdf with results")
     eval_params.add_argument('--visdom', action='store_true', help="use visdom for on-the-fly plots")
@@ -84,6 +93,14 @@ def add_problem_options(parser, pretrain=False, no_boundaries=False, **kwargs):
         problem_params.add_argument('--contexts', type=int, metavar='N', help='number of contexts')
         problem_params.add_argument('--iters', type=int, help="# iterations (mini-batches) per context")
         problem_params.add_argument('--batch', type=int, help="mini batch size (# observations per iteration)")
+        problem_params.add_argument(
+            '--adversarial-label-shuffle',
+            action='store_true',
+            help=(
+                "Shuffle labels within each task to create adversarial label mappings "
+                "(used for CIFAR-100 experiments)"
+            ),
+        )
     if pretrain:
         problem_params.add_argument('--augment', action='store_true',
                                     help="augment training data (random crop & horizontal flip)")
