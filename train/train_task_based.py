@@ -37,7 +37,9 @@ def train_cl(model, train_datasets, iters=2000, batch_size=32, baseline='none',
     previous_model = None
     if hasattr(model, 'experiment'):
         model.experiment = experiment
-
+    if getattr(model, 'use_adaptive', False):
+        model.lambda_logs = []
+        model.lambda_task_averages = []
     # Register starting parameter values (needed for SI)
     if isinstance(model, ContinualLearner):
         if model.importance_weighting=='si':
@@ -80,6 +82,9 @@ def train_cl(model, train_datasets, iters=2000, batch_size=32, baseline='none',
             training_dataset = ConcatDataset([train_dataset, memory_dataset])
         else:
             training_dataset = train_dataset
+
+        if getattr(model, 'use_adaptive', False):
+            model.lambda_logs.append([])
 
         if checkattr(model, 'use_adaptive'):
             model.prepare_for_new_task(training_dataset)
@@ -316,6 +321,10 @@ def train_cl(model, train_datasets, iters=2000, batch_size=32, baseline='none',
                 loss_dict = model.train_a_batch(x, y, x_=x_, y_=y_, scores=scores, scores_=scores_, rnt = 1./context,
                                                 contexts_=context_used, active_classes=active_classes, context=context)
 
+                if getattr(model, 'use_adaptive', False) and len(model.lambda_logs) > 0:
+                    current_lambda = loss_dict.get('lambda_t', getattr(model, 'lambda_t', 0.0))
+                    model.lambda_logs[-1].append(current_lambda)
+
                 # Update running parameter importance estimates in W (needed for SI)
                 if isinstance(model, ContinualLearner) and model.importance_weighting=='si':
                     model.update_importance_estimates(W, p_old)
@@ -348,6 +357,11 @@ def train_cl(model, train_datasets, iters=2000, batch_size=32, baseline='none',
 
 
         ##----------> UPON FINISHING EACH CONTEXT...
+        if getattr(model, 'use_adaptive', False) and len(model.lambda_logs) > 0:
+            lambda_values = model.lambda_logs[-1]
+            avg_lambda = float(np.mean(lambda_values)) if len(lambda_values) > 0 else float(
+                getattr(model, 'lambda_t', 0.0))
+            model.lambda_task_averages.append(avg_lambda)
 
         # Close progres-bar(s)
         progress.close()
