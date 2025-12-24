@@ -8,6 +8,7 @@ from utils import get_data_loader
 from models import fc
 from models.utils.ncl import additive_nearest_kf
 import copy
+import math
 from utils import checkattr
 
 
@@ -97,13 +98,16 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
         self.ema_beta = 0.95 # EMA 平滑系数
         self.warmup_steps = 100  # warmup 的迭代步数
         self.update_step_count = 0  # 记录更新次数
+        self.conflict_beta = 0.9  # 平滑几何冲突评分的系数
+        self.geometry_conflict_ema = None
+        self.drift_ema = None
+        self.min_drift_scale = 1e-4
 
         # 添加消融实验参数
         self.ablation_fixed_numerator = False  # 是否固定分子
-        self.fixed_numerator_value = 0.1  # 固定分子的值
-        self.ablation_fixed_denominator = False  # 是否固定分母
-        self.fixed_denominator_value = 10.0  # 固定分母的值
-
+        self.fixed_numerator_value = 10.0  # 固定分子的值
+        self.ablation_fixed_denominator = False
+        self.fixed_denominator_value = 0.01
 
     def _device(self):
         return next(self.parameters()).device
@@ -117,6 +121,21 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
         print(f"[DEBUG] Initialized regularized_param_names: {self.regularized_param_names}")
         self.shared_param_names = [n for n, p in self.named_parameters() if p.requires_grad and 'bn' not in n and 'bias' not in n and 'classifier' not in n]
         print(f"[DEBUG] shared regularized_param_names: {self.shared_param_names}")
+
+    def _rms_from_tensor_dict(self, tensor_dict, names):
+        total_sq = 0.0
+        elem_count = 0
+        for name in names:
+            if name not in tensor_dict:
+                continue
+            tensor = tensor_dict[name]
+            if tensor is None:
+                continue
+            total_sq += torch.norm(tensor, p='fro').pow(2).item()
+            elem_count += tensor.numel()
+        if elem_count == 0:
+            return 0.0
+        return math.sqrt(total_sq / elem_count)
 
     def update_lambda(self, x, y):
         if not self.use_adaptive or self.prev_theta_p is None or self.current_H_p is None or self.prev_H_p is None:
@@ -132,12 +151,29 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
                 numerator = self.fixed_numerator_value
             else:
                 total_hessian_diff_norm_sq = 0.0
+                elem_count = 0
+
                 for name in params_to_use_for_hessian:
                     if name not in self.current_H_p or name not in self.prev_H_p:
                         continue
                     h_diff = self.current_H_p[name] - self.prev_H_p[name]
-                    total_hessian_diff_norm_sq += torch.norm(h_diff, p='fro') ** 2
-                numerator = torch.sqrt(total_hessian_diff_norm_sq) / len(params_to_use_for_hessian)
+                    total_hessian_diff_norm_sq += torch.norm(h_diff, p='fro').pow(2).item()
+                    elem_count += h_diff.numel()
+                if elem_count == 0:
+                    return
+                numerator = math.sqrt(total_hessian_diff_norm_sq / elem_count)
+
+                prev_scale = self._rms_from_tensor_dict(self.prev_H_p, params_to_use_for_hessian)
+                curr_scale = self._rms_from_tensor_dict(self.current_H_p, params_to_use_for_hessian)
+                reference_scale = max(0.5 * (prev_scale + curr_scale), self.epsilon_0)
+                geometry_ratio = numerator / reference_scale
+                if self.geometry_conflict_ema is None:
+                    self.geometry_conflict_ema = geometry_ratio
+                else:
+                    self.geometry_conflict_ema = (
+                            self.conflict_beta * self.geometry_conflict_ema +
+                            (1 - self.conflict_beta) * geometry_ratio
+                    )
 
             # ===== 计算分母 =====
             if self.ablation_fixed_denominator:
@@ -153,14 +189,21 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
                     if name not in self.prev_theta_p:
                         continue
                     p_diff = named_params_dict[name] - self.prev_theta_p[name]
-                    total_param_diff_norm_sq += torch.norm(p_diff) ** 2
+                    total_param_diff_norm_sq += p_diff.pow(2).sum().item()
                     num_params_total += named_params_dict[name].numel()
+                if num_params_total == 0:
+                    return
 
-                if num_params_total > 0:
-                    denominator = 0.5 * (torch.sqrt(total_param_diff_norm_sq) / num_params_total)
-                    denominator = torch.clamp(denominator, min=1e-8)
+                drift_rms = math.sqrt(total_param_diff_norm_sq / num_params_total)
+                if self.drift_ema is None:
+                    self.drift_ema = drift_rms
                 else:
-                    denominator = torch.tensor(1e-8)
+                    self.drift_ema = (
+                            self.conflict_beta * self.drift_ema +
+                            (1 - self.conflict_beta) * drift_rms
+                    )
+                denominator = max(drift_rms, self.drift_ema, self.min_drift_scale)
+
 
             # ===== 计算lambda =====
             if isinstance(numerator, torch.Tensor):
@@ -168,9 +211,10 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
             if isinstance(denominator, torch.Tensor):
                 denominator = denominator.item()
 
-            ratio = numerator / denominator
-            effective_ratio = pow(max(ratio, 1e-9), self.scaling_power)
-            lambda_hat = max(min(self.lambda_0 * effective_ratio, self.M), self.epsilon_0)
+            conflict_score = geometry_ratio / (denominator + self.epsilon_0)
+            smoothed_conflict = max(conflict_score, self.geometry_conflict_ema)
+            lambda_hat = self.lambda_0 * pow(1.0 + max(smoothed_conflict, 0.0), self.scaling_power)
+            lambda_hat = max(min(lambda_hat, self.M), self.lambda_0)
 
             # Warmup + EMA
             self.update_step_count += 1
