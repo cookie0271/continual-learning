@@ -8,6 +8,7 @@ from utils import get_data_loader
 from models import fc
 from models.utils.ncl import additive_nearest_kf
 import copy
+import math
 from utils import checkattr
 
 
@@ -95,15 +96,21 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
         self.shared_param_names = []  # CIFAR100 Task-IL 场景下共享的参数
         self.lambda_ema = self.lambda_0  # EMA 平滑后的 λ_t
         self.ema_beta = 0.95 # EMA 平滑系数
-        self.warmup_steps = 100  # warmup 的迭代步数
+        self.warmup_steps = 5  # warmup 的迭代步数
         self.update_step_count = 0  # 记录更新次数
+        self.conflict_beta = 0.9  # 平滑几何冲突评分的系数
+        self.geometry_conflict_ema = None
+        self.drift_ema = None
+        self.min_drift_scale = 1e-4
+        self.hessian_update_counter = 0  # 记录在线 Hessian 更新次数
+        self.hessian_update_interval = 10  # 多少个 step 刷新一次 Hessian
+        self.hessian_ema_beta = 0.9  # 在线 Hessian 的 EMA 平滑系数
 
         # 添加消融实验参数
         self.ablation_fixed_numerator = False  # 是否固定分子
-        self.fixed_numerator_value = 0.1  # 固定分子的值
-        self.ablation_fixed_denominator = False  # 是否固定分母
-        self.fixed_denominator_value = 10.0  # 固定分母的值
-
+        self.fixed_numerator_value = 10.0  # 固定分子的值
+        self.ablation_fixed_denominator = False
+        self.fixed_denominator_value = 0.01
 
     def _device(self):
         return next(self.parameters()).device
@@ -118,6 +125,21 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
         self.shared_param_names = [n for n, p in self.named_parameters() if p.requires_grad and 'bn' not in n and 'bias' not in n and 'classifier' not in n]
         print(f"[DEBUG] shared regularized_param_names: {self.shared_param_names}")
 
+    def _rms_from_tensor_dict(self, tensor_dict, names):
+        total_sq = 0.0
+        elem_count = 0
+        for name in names:
+            if name not in tensor_dict:
+                continue
+            tensor = tensor_dict[name]
+            if tensor is None:
+                continue
+            total_sq += torch.norm(tensor, p='fro').pow(2).item()
+            elem_count += tensor.numel()
+        if elem_count == 0:
+            return 0.0
+        return math.sqrt(total_sq / elem_count)
+
     def update_lambda(self, x, y):
         if not self.use_adaptive or self.prev_theta_p is None or self.current_H_p is None or self.prev_H_p is None:
             return
@@ -127,17 +149,37 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
             if self.experiment == 'CIFAR100' and self.scenario == 'task':
                 params_to_use_for_hessian = self.shared_param_names
 
+            # ===== 在线更新 current_H_p 的分子（几何项） =====
+            self._refresh_current_hessian(x, y, params_to_use_for_hessian)
+
             # ===== 计算分子 =====
             if self.ablation_fixed_numerator:
                 numerator = self.fixed_numerator_value
             else:
                 total_hessian_diff_norm_sq = 0.0
+                elem_count = 0
+
                 for name in params_to_use_for_hessian:
                     if name not in self.current_H_p or name not in self.prev_H_p:
                         continue
                     h_diff = self.current_H_p[name] - self.prev_H_p[name]
-                    total_hessian_diff_norm_sq += torch.norm(h_diff, p='fro') ** 2
-                numerator = torch.sqrt(total_hessian_diff_norm_sq) / len(params_to_use_for_hessian)
+                    total_hessian_diff_norm_sq += torch.norm(h_diff, p='fro').pow(2).item()
+                    elem_count += h_diff.numel()
+                if elem_count == 0:
+                    return
+                numerator = math.sqrt(total_hessian_diff_norm_sq / elem_count)
+
+                prev_scale = self._rms_from_tensor_dict(self.prev_H_p, params_to_use_for_hessian)
+                curr_scale = self._rms_from_tensor_dict(self.current_H_p, params_to_use_for_hessian)
+                reference_scale = max(0.5 * (prev_scale + curr_scale), self.epsilon_0)
+                geometry_ratio = numerator / reference_scale
+                if self.geometry_conflict_ema is None:
+                    self.geometry_conflict_ema = geometry_ratio
+                else:
+                    self.geometry_conflict_ema = (
+                            self.conflict_beta * self.geometry_conflict_ema +
+                            (1 - self.conflict_beta) * geometry_ratio
+                    )
 
             # ===== 计算分母 =====
             if self.ablation_fixed_denominator:
@@ -153,14 +195,21 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
                     if name not in self.prev_theta_p:
                         continue
                     p_diff = named_params_dict[name] - self.prev_theta_p[name]
-                    total_param_diff_norm_sq += torch.norm(p_diff) ** 2
+                    total_param_diff_norm_sq += p_diff.pow(2).sum().item()
                     num_params_total += named_params_dict[name].numel()
+                if num_params_total == 0:
+                    return
 
-                if num_params_total > 0:
-                    denominator = 0.5 * (torch.sqrt(total_param_diff_norm_sq) / num_params_total)
-                    denominator = torch.clamp(denominator, min=1e-8)
+                drift_rms = math.sqrt(total_param_diff_norm_sq / num_params_total)
+                if self.drift_ema is None:
+                    self.drift_ema = drift_rms
                 else:
-                    denominator = torch.tensor(1e-8)
+                    self.drift_ema = (
+                            self.conflict_beta * self.drift_ema +
+                            (1 - self.conflict_beta) * drift_rms
+                    )
+                denominator = max(drift_rms, self.drift_ema, self.min_drift_scale)
+
 
             # ===== 计算lambda =====
             if isinstance(numerator, torch.Tensor):
@@ -168,9 +217,10 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
             if isinstance(denominator, torch.Tensor):
                 denominator = denominator.item()
 
-            ratio = numerator / denominator
-            effective_ratio = pow(max(ratio, 1e-9), self.scaling_power)
-            lambda_hat = max(min(self.lambda_0 * effective_ratio, self.M), self.epsilon_0)
+            conflict_score = geometry_ratio / (denominator + self.epsilon_0)
+            smoothed_conflict = max(conflict_score, self.geometry_conflict_ema)
+            lambda_hat = self.lambda_0 * pow(1.0 + max(smoothed_conflict, 0.0), self.scaling_power)
+            lambda_hat = max(min(lambda_hat, self.M), self.lambda_0)
 
             # Warmup + EMA
             self.update_step_count += 1
@@ -182,6 +232,50 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
         except Exception as e:
             print(f"Error in λ_t update: {e}")
 
+    def _refresh_current_hessian(self, x, y, params_to_use_for_hessian):
+        """使用当前 batch 对 current_H_p 做在线更新，使分子在任务内随 step 变化。
+
+        复用了在 `classifier.py` 中被注释掉的思路：
+        - 周期性地用上一任务的参数快照（prev_theta_p）计算 H_k(θ_{k-1}^*)，
+          避免污染当前模型参数。
+        - 新的 Hessian 与已有的 current_H_p 做 EMA 融合，保持平滑。
+        """
+        if x is None or y is None:
+            return
+
+        self.hessian_update_counter += 1
+        need_refresh = self.current_H_p is None or (
+                self.hessian_update_counter % self.hessian_update_interval == 0
+        )
+        if not need_refresh:
+            return
+
+        # 使用上一任务收敛的参数快照计算 Hessian，避免梯度在当前参数上累积
+        model_copy = copy.deepcopy(self)
+        model_copy.load_state_dict(self.prev_theta_p, strict=False)
+        model_copy.eval()
+
+        with torch.no_grad():
+            x_hess = x.detach().clone()
+            y_hess = y.detach().clone()
+        new_h_k = model_copy.compute_hessian((x_hess, y_hess), batch_mode=True)
+        del model_copy
+        torch.cuda.empty_cache()
+
+        if self.current_H_p is None:
+            self.current_H_p = new_h_k
+            return
+
+        # EMA 平滑融合，避免剧烈抖动
+        blended_hessian = {}
+        for name in params_to_use_for_hessian:
+            if name in new_h_k and name in self.current_H_p:
+                blended_hessian[name] = (
+                        self.hessian_ema_beta * self.current_H_p[name]
+                        + (1 - self.hessian_ema_beta) * new_h_k[name]
+                )
+        self.current_H_p.update(blended_hessian)
+
     def compute_hessian(self, dataset, batch_mode=False):
         """
         Compute a diagonal Hessian approximation for the dataset EFFICIENTLY
@@ -189,13 +283,14 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
         """
         # 1. 设置模型为评估模式
         self.train(False)
-
-        # 2. 使用一个合理的批次大小来加载数据
-        #    这个批次仅用于数据传输，核心计算仍然是逐样本的
-        hessian_batch_size = 256  # 可根据显存调整
-        data_loader = get_data_loader(
-            dataset, batch_size=hessian_batch_size, cuda=self._is_on_cuda()
-        )
+        # 2. 准备数据迭代器：batch_mode=True 表示直接使用 (x, y) 元组做在线估计
+        if batch_mode:
+            data_iterable = [(dataset[0], dataset[1])]
+        else:
+            hessian_batch_size = 16  # 可根据显存调整
+            data_iterable = get_data_loader(
+                dataset, batch_size=hessian_batch_size, cuda=self._is_on_cuda()
+            )
 
         # 3. 一次性为所有需要正则化的参数初始化累加器
         hessian = {
@@ -210,9 +305,12 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
                     if hessian[name].dim() != param.dim() - 1:
                         hessian[name] = torch.zeros_like(param.data.sum(dim=0))
 
+        total_samples = 0
+
         # 4. 遍历数据加载器中的所有批次
-        for x, y in data_loader:
+        for x, y in data_iterable:
             x, y = x.to(self._device()), y.to(self._device())
+            total_samples += x.size(0)
 
             # 5. 🚀 核心优化点：在批次内部进行“微循环”
             #    这保证了我们是逐样本计算梯度，与原始逻辑完全一致
@@ -236,10 +334,9 @@ class ContinualLearner(nn.Module, metaclass=abc.ABCMeta):
                                 hessian[name] += param.grad.pow(2)
 
         # 7. 最终，用数据集的总样本数进行归一化
-        num_samples = len(dataset)
-        if num_samples > 0:
+        if total_samples > 0:
             for name in hessian.keys():
-                hessian[name] /= num_samples
+                hessian[name] /= total_samples
         else:
             print("Warning: No samples for Hessian computation")
             # 按需处理

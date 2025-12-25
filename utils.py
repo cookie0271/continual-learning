@@ -39,7 +39,7 @@ def get_data_loader(dataset, batch_size, cuda=False, drop_last=False, augment=Fa
     # Create and return the <DataLoader>-object
     return DataLoader(
         dataset_, batch_size=batch_size, shuffle=True, drop_last=drop_last,
-        **({'num_workers': 0, 'pin_memory': True} if cuda else {})
+        **({'num_workers': 10, 'pin_memory': True} if cuda else {})
     )
 
 def to_one_hot(y, classes):
