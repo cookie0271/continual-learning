@@ -3,7 +3,7 @@ import torch
 from torch.nn import functional as F
 from models.fc.layers import fc_layer, fc_multihead_layer
 from models.fc.nets import MLP, MLP_gates
-from models.conv.nets import ConvLayers
+from models.conv.nets import get_conv_net
 from models.cl.memory_buffer_stream import MemoryBuffer
 from models.cl.continual_learner import ContinualLearner
 from models.utils import loss_functions as lf, modules
@@ -52,7 +52,7 @@ class Classifier(ContinualLearner, MemoryBuffer):
 
         ######------SPECIFY MODEL------######
         #--> convolutional layers
-        self.convE = ConvLayers(
+        self.convE = get_conv_net(
             conv_type=conv_type, block_type="basic", num_blocks=num_blocks, image_channels=image_channels,
             depth=depth, start_channels=start_channels, reducing_layers=reducing_layers, batch_norm=conv_bn, nl=conv_nl,
             global_pooling=global_pooling, gated=conv_gated, output="none" if no_fnl else "normal",

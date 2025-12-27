@@ -5,7 +5,7 @@ from torch import nn
 from torch.nn import functional as F
 from models.fc.layers import fc_layer,fc_layer_split
 from models.fc.nets import MLP
-from models.conv.nets import ConvLayers,DeconvLayers
+from models.conv.nets import DeconvLayers, get_conv_net
 from models.cl.continual_learner import ContinualLearner
 from models.utils import loss_functions as lf, modules
 
@@ -61,11 +61,11 @@ class VAE(ContinualLearner):
         ######------SPECIFY MODEL------######
 
         ##>----Encoder (= q[z|x])----<##
-        self.convE = ConvLayers(conv_type=conv_type, block_type="basic", num_blocks=num_blocks,
-                                image_channels=image_channels, depth=self.depth, start_channels=start_channels,
-                                reducing_layers=reducing_layers, batch_norm=conv_bn, nl=conv_nl,
-                                output="none" if no_fnl else "normal", global_pooling=global_pooling,
-                                gated=conv_gated)
+        self.convE = get_conv_net(conv_type=conv_type, block_type="basic", num_blocks=num_blocks,
+                                  image_channels=image_channels, depth=self.depth, start_channels=start_channels,
+                                  reducing_layers=reducing_layers, batch_norm=conv_bn, nl=conv_nl,
+                                  output="none" if no_fnl else "normal", global_pooling=global_pooling,
+                                  gated=conv_gated)
         # -flatten image to 2D-tensor
         self.flatten = modules.Flatten()
         #------------------------------calculate input/output-sizes--------------------------------#

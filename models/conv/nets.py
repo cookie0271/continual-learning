@@ -2,6 +2,7 @@ from torch import nn
 import numpy as np
 import models.conv.layers as conv_layers
 from models.utils import modules
+from torchvision import models as tv_models
 
 
 class ConvLayers(nn.Module):
@@ -147,6 +148,61 @@ class ConvLayers(nn.Module):
         return self.label
 
 
+
+
+class TorchVisionResNet(nn.Module):
+    """Wrapper around torchvision ResNet architectures with a compatible interface."""
+
+    def __init__(self, variant="resnet18", image_channels=3):
+        super().__init__()
+        if variant != "resnet18":
+            raise ValueError(f"Unsupported torchvision ResNet variant: {variant}")
+        resnet = tv_models.resnet18(weights=None)
+        # use a 3x3 stem without maxpool to mirror TinyImageNet-friendly setups
+        resnet.conv1 = nn.Conv2d(image_channels, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        resnet.maxpool = nn.Identity()
+        resnet.fc = modules.Identity()
+        self.resnet = resnet
+        self.out_channels = 512
+        self.global_pooling = True
+        self.label = f"tvResNet18-{image_channels}"
+
+    def forward(self, x, **_):
+        return self.resnet(x)
+
+    def out_size(self, image_size, **_):
+        _ = image_size
+        return 1
+
+    def out_units(self, image_size, **_):
+        return self.out_channels * (self.out_size(image_size) ** 2)
+
+    def layer_info(self, image_size):
+        sizes = []
+        sizes.append([64, image_size, image_size])
+        channels_per_layer = [64, 128, 256, 512]
+        size = image_size
+        for channels in channels_per_layer:
+            if channels > 64:
+                size = int(np.floor((size + 1) / 2))
+            sizes.append([channels, size, size])
+        sizes.append([self.out_channels, 1, 1])
+        return sizes
+
+    def list_init_layers(self):
+        return [m for m in self.resnet.modules() if isinstance(m, nn.Conv2d)]
+
+    @property
+    def name(self):
+        return self.label
+
+
+def get_conv_net(conv_type="standard", **kwargs):
+    if conv_type is None:
+        conv_type = "standard"
+    if conv_type in ("resNet18", "resnet18", "tv_resnet18"):
+        return TorchVisionResNet(variant="resnet18", image_channels=kwargs.get("image_channels", 3))
+    return ConvLayers(conv_type=conv_type, **kwargs)
 
 
 class DeconvLayers(nn.Module):
