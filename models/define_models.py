@@ -1,6 +1,11 @@
 import utils
 from utils import checkattr
 
+
+def _use_conv_layers(args, depth):
+    resnet_backbones = ('resNet18', 'resnet18', 'tv_resnet18')
+    return depth > 0 or (hasattr(args, 'conv_type') and args.conv_type in resnet_backbones)
+
 ##-------------------------------------------------------------------------------------------------------------------##
 
 def define_classifier(args, config, device, depth=0, stream=False):
@@ -23,21 +28,22 @@ def define_classifier(args, config, device, depth=0, stream=False):
 def define_stream_classifier(args, config, device, depth=0):
     # Import required model
     from models.classifier_stream import Classifier
+    use_conv = _use_conv_layers(args, depth)
     # Specify model
     model = Classifier(
         image_size=config['size'],
         image_channels=config['channels'],
         classes=config['output_units'],
         # -conv-layers
-        depth=depth,
-        conv_type=args.conv_type if depth > 0 else None,
-        start_channels=args.channels if depth > 0 else None,
-        reducing_layers=args.rl if depth > 0 else None,
-        num_blocks=args.n_blocks if depth > 0 else None,
-        conv_bn=(True if args.conv_bn == "yes" else False) if depth > 0 else None,
-        conv_nl=args.conv_nl if depth > 0 else None,
-        no_fnl=True if depth > 0 else None,
-        global_pooling=checkattr(args, 'gp') if depth > 0 else None,
+        depth=depth if use_conv else 0,
+        conv_type=args.conv_type if use_conv else None,
+        start_channels=args.channels if use_conv else None,
+        reducing_layers=args.rl if use_conv else None,
+        num_blocks=args.n_blocks if use_conv else None,
+        conv_bn=(True if args.conv_bn == "yes" else False) if use_conv else None,
+        conv_nl=args.conv_nl if use_conv else None,
+        no_fnl=True if use_conv else None,
+        global_pooling=checkattr(args, 'gp') if use_conv else None,
         # -fc-layers
         fc_layers=args.fc_lay,
         fc_units=args.fc_units,
@@ -61,21 +67,22 @@ def define_stream_classifier(args, config, device, depth=0):
 def define_standard_classifier(args, config, device, depth=0):
     # Import required model
     from models.classifier import Classifier
+    use_conv = _use_conv_layers(args, depth)
     # Specify model
     model = Classifier(
         image_size=config['size'],
         image_channels=config['channels'],
         classes=config['output_units'],
         # -conv-layers
-        depth=depth,
-        conv_type=args.conv_type if depth>0 else None,
-        start_channels=args.channels if depth>0 else None,
-        reducing_layers=args.rl if depth>0 else None,
-        num_blocks=args.n_blocks if depth>0 else None,
-        conv_bn=(True if args.conv_bn=="yes" else False) if depth>0 else None,
-        conv_nl=args.conv_nl if depth>0 else None,
-        no_fnl=True if depth>0 else None,
-        global_pooling=checkattr(args, 'gp') if depth>0 else None,
+        depth=depth if use_conv else 0,
+        conv_type=args.conv_type if use_conv else None,
+        start_channels=args.channels if use_conv else None,
+        reducing_layers=args.rl if use_conv else None,
+        num_blocks=args.n_blocks if use_conv else None,
+        conv_bn=(True if args.conv_bn=="yes" else False) if use_conv else None,
+        conv_nl=args.conv_nl if use_conv else None,
+        no_fnl=True if use_conv else None,
+        global_pooling=checkattr(args, 'gp') if use_conv else None,
         # -fc-layers
         fc_layers=args.fc_lay,
         fc_units=args.fc_units,
@@ -94,20 +101,21 @@ def define_standard_classifier(args, config, device, depth=0):
 def define_rtf_classifier(args, config, device, depth=0):
     # Import required model
     from models.cond_vae import CondVAE
+    use_conv = _use_conv_layers(args, depth)
     # Specify model
     model = CondVAE(
         image_size=config['size'],
         image_channels=config['channels'],
         classes=config['output_units'],
         # -conv-layers
-        depth=depth,
-        conv_type=args.conv_type if depth > 0 else None,
-        start_channels=args.channels if depth > 0 else None,
-        reducing_layers=args.rl if depth > 0 else None,
-        num_blocks=args.n_blocks if depth > 0 else None,
-        conv_bn=(True if args.conv_bn == "yes" else False) if depth > 0 else None,
-        conv_nl=args.conv_nl if depth > 0 else None,
-        global_pooling=checkattr(args, 'gp') if depth > 0 else None,
+        depth=depth if use_conv else 0,
+        conv_type=args.conv_type if use_conv else None,
+        start_channels=args.channels if use_conv else None,
+        reducing_layers=args.rl if use_conv else None,
+        num_blocks=args.n_blocks if use_conv else None,
+        conv_bn=(True if args.conv_bn == "yes" else False) if use_conv else None,
+        conv_nl=args.conv_nl if use_conv else None,
+        global_pooling=checkattr(args, 'gp') if use_conv else None,
         # -fc-layers
         fc_layers=args.fc_lay,
         fc_units=args.fc_units,
@@ -141,6 +149,7 @@ def define_rtf_classifier(args, config, device, depth=0):
 def define_separate_classifiers(args, config, device, depth=0):
     # Import required model
     from models.separate_classifiers import SeparateClassifiers
+    use_conv = _use_conv_layers(args, depth)
     # Specify model
     model = SeparateClassifiers(
         image_size=config['size'],
@@ -148,15 +157,15 @@ def define_separate_classifiers(args, config, device, depth=0):
         classes_per_context=config['classes_per_context'],
         contexts=args.contexts,
         # -conv-layers
-        depth=depth,
-        conv_type=args.conv_type if depth>0 else None,
-        start_channels=args.channels if depth>0 else None,
-        reducing_layers=args.rl if depth>0 else None,
-        num_blocks=args.n_blocks if depth>0 else None,
-        conv_bn=(True if args.conv_bn=="yes" else False) if depth>0 else None,
-        conv_nl=args.conv_nl if depth>0 else None,
-        no_fnl=True if depth>0 else None,
-        global_pooling=checkattr(args, 'gp') if depth>0 else None,
+        depth=depth if use_conv else 0,
+        conv_type=args.conv_type if use_conv else None,
+        start_channels=args.channels if use_conv else None,
+        reducing_layers=args.rl if use_conv else None,
+        num_blocks=args.n_blocks if use_conv else None,
+        conv_bn=(True if args.conv_bn=="yes" else False) if use_conv else None,
+        conv_nl=args.conv_nl if use_conv else None,
+        no_fnl=True if use_conv else None,
+        global_pooling=checkattr(args, 'gp') if use_conv else None,
         # -fc-layers
         fc_layers=args.fc_lay,
         fc_units=args.fc_units,
@@ -173,21 +182,22 @@ def define_separate_classifiers(args, config, device, depth=0):
 def define_generative_classifer(args, config, device, depth=0):
     # Import required model
     from models.generative_classifier import GenerativeClassifier
+    use_conv = _use_conv_layers(args, depth)
     # Specify model
     model = GenerativeClassifier(
         image_size=config['size'],
         image_channels=config['channels'],
         classes=config['classes'],
         # -conv-layers
-        depth=depth,
-        conv_type=args.conv_type if depth>0 else None,
-        start_channels=args.channels if depth>0 else None,
-        reducing_layers=args.rl if depth>0 else None,
-        num_blocks=args.n_blocks if depth>0 else None,
-        conv_bn=(True if args.conv_bn=="yes" else False) if depth>0 else None,
-        conv_nl=args.conv_nl if depth>0 else None,
-        no_fnl=True if depth>0 else None,
-        global_pooling=checkattr(args, 'gp') if depth>0 else None,
+        depth=depth if use_conv else 0,
+        conv_type=args.conv_type if use_conv else None,
+        start_channels=args.channels if use_conv else None,
+        reducing_layers=args.rl if use_conv else None,
+        num_blocks=args.n_blocks if use_conv else None,
+        conv_bn=(True if args.conv_bn=="yes" else False) if use_conv else None,
+        conv_nl=args.conv_nl if use_conv else None,
+        no_fnl=True if use_conv else None,
+        global_pooling=checkattr(args, 'gp') if use_conv else None,
         # -fc-layers
         fc_layers=args.fc_lay,
         fc_units=args.fc_units,
@@ -213,19 +223,20 @@ def define_generative_classifer(args, config, device, depth=0):
 def define_feature_extractor(args, config, device):
     # -import required model
     from models.feature_extractor import FeatureExtractor
+    use_conv = _use_conv_layers(args, args.depth)
     # -create model
     model = FeatureExtractor(
         image_size=config['size'],
         image_channels=config['channels'],
         # -conv-layers
-        conv_type=args.conv_type,
-        depth=args.depth,
-        start_channels=args.channels,
-        reducing_layers=args.rl,
-        num_blocks=args.n_blocks,
-        conv_bn=True if args.conv_bn=="yes" else False,
-        conv_nl=args.conv_nl,
-        global_pooling=checkattr(args, 'gp'),
+        conv_type=args.conv_type if use_conv else None,
+        depth=args.depth if use_conv else 0,
+        start_channels=args.channels if use_conv else None,
+        reducing_layers=args.rl if use_conv else None,
+        num_blocks=args.n_blocks if use_conv else None,
+        conv_bn=(True if args.conv_bn=="yes" else False) if use_conv else None,
+        conv_nl=args.conv_nl if use_conv else None,
+        global_pooling=checkattr(args, 'gp') if use_conv else None,
     ).to(device)
     # -return model
     return model
@@ -236,19 +247,20 @@ def define_feature_extractor(args, config, device):
 def define_vae(args, config, device, depth=0):
     # Import required model
     from models.vae import VAE
+    use_conv = _use_conv_layers(args, depth)
     # Specify model
     model = VAE(
         image_size=config['size'],
         image_channels=config['channels'],
         # -conv-layers
-        depth=depth,
-        conv_type=args.conv_type if depth > 0 else None,
-        start_channels=args.channels if depth > 0 else None,
-        reducing_layers=args.rl if depth > 0 else None,
-        num_blocks=args.n_blocks if depth > 0 else None,
-        conv_bn=(True if args.conv_bn == "yes" else False) if depth > 0 else None,
-        conv_nl=args.conv_nl if depth > 0 else None,
-        global_pooling=False if depth > 0 else None,
+        depth=depth if use_conv else 0,
+        conv_type=args.conv_type if use_conv else None,
+        start_channels=args.channels if use_conv else None,
+        reducing_layers=args.rl if use_conv else None,
+        num_blocks=args.n_blocks if use_conv else None,
+        conv_bn=(True if args.conv_bn == "yes" else False) if use_conv else None,
+        conv_nl=args.conv_nl if use_conv else None,
+        global_pooling=False if use_conv else None,
         # -fc-layers
         fc_layers=args.g_fc_lay if hasattr(args, 'g_fc_lay') else args.fc_lay,
         fc_units=args.g_fc_uni if hasattr(args, 'g_fc_uni') else args.fc_units,

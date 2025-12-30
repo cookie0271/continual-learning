@@ -57,9 +57,12 @@ def set_method_options(args, **kwargs):
 
 def set_default_values(args, also_hyper_params=True, single_context=False, no_boundaries=False):
     # -set default-values for certain arguments based on chosen experiment
-    args.normalize = args.normalize if args.experiment in ('CIFAR10', 'CIFAR100') else False
+    args.normalize = args.normalize if args.experiment in ('CIFAR10', 'CIFAR100', 'TinyImageNet') else False
+    resnet_backbones = ('resNet18', 'resnet18', 'tv_resnet18')
     args.depth = (
-            5 if (args.experiment in ('CIFAR10', 'CIFAR100')) or checkattr(args, 'reducedResNet') else 0
+            0 if args.conv_type in resnet_backbones else (
+                5 if (args.experiment in ('CIFAR10', 'CIFAR100', 'TinyImageNet')) or checkattr(args, 'reducedResNet') else 0
+            )
         ) if args.depth is None else args.depth
     args.fc_lay = (1 if checkattr(args, 'reducedResNet') else 3) if args.fc_lay is None else args.fc_lay
     args.channels = (20 if checkattr(args, 'reducedResNet') else 16) if args.channels is None else args.channels
@@ -89,7 +92,7 @@ def set_default_values(args, also_hyper_params=True, single_context=False, no_bo
         args.z_dim_gc = (5 if args.experiment == 'splitMNIST' else 20) if args.z_dim_gc is None else args.z_dim_gc
     if hasattr(args, 'recon_loss'):
         args.recon_loss = (
-            "MSE" if args.experiment in ('CIFAR10', 'CIFAR100') else "BCE"
+            "MSE" if args.experiment in ('CIFAR10', 'CIFAR100', 'TinyImageNet') else "BCE"
         ) if args.recon_loss is None else args.recon_loss
     if hasattr(args, "dg_type"):
         args.dg_type = ("context" if args.scenario == 'domain' else "class") if args.dg_type is None else args.dg_type
@@ -116,7 +119,7 @@ def set_default_values(args, also_hyper_params=True, single_context=False, no_bo
     if hasattr(args, 'scenario') and args.scenario == 'task' and hasattr(args, 'gating_prop'):
         # -context-specific gating
         args.gating_prop = (
-            0.85 if args.experiment == 'CIFAR100' else (0.9 if args.experiment == 'splitMNIST' else 0.6)
+            0.85 if args.experiment in ('CIFAR100', 'TinyImageNet') else (0.9 if args.experiment == 'splitMNIST' else 0.6)
         ) if args.gating_prop is None else args.gating_prop
     if also_hyper_params:
         # -regularization strength
@@ -128,17 +131,17 @@ def set_default_values(args, also_hyper_params=True, single_context=False, no_bo
             args.si_c = 10. if args.si_c is None else args.si_c
         elif args.scenario == 'task':
             args.si_c = (
-                10. if args.experiment == 'splitMNIST' else (100. if args.experiment == 'CIFAR100' else 10.)
+                10. if args.experiment == 'splitMNIST' else (100. if args.experiment in ('CIFAR100', 'TinyImageNet') else 10.)
             ) if args.si_c is None else args.si_c
             args.ewc_lambda = (
-                100000. if args.experiment == 'splitMNIST' else (1000. if args.experiment == 'CIFAR100' else 100.)
+                100000. if args.experiment == 'splitMNIST' else (1000. if args.experiment in ('CIFAR100', 'TinyImageNet') else 100.)
             ) if args.ewc_lambda is None else args.ewc_lambda
         elif args.scenario == 'domain':
             args.si_c = (
-                50000. if args.experiment == 'splitMNIST' else (500. if args.experiment == 'CIFAR100' else 10.)
+                50000. if args.experiment == 'splitMNIST' else (500. if args.experiment in ('CIFAR100', 'TinyImageNet') else 10.)
             ) if args.si_c is None else args.si_c
             args.ewc_lambda = (
-                10000000000. if args.experiment == 'splitMNIST' else (1000. if args.experiment == 'CIFAR100' else 100.)
+                10000000000. if args.experiment == 'splitMNIST' else (1000. if args.experiment in ('CIFAR100', 'TinyImageNet') else 100.)
             ) if args.ewc_lambda is None else args.ewc_lambda
         elif args.scenario == 'class':
             args.si_c = (5000. if args.experiment == 'splitMNIST' else 5.) if args.si_c is None else args.si_c
@@ -170,8 +173,8 @@ def set_default_values(args, also_hyper_params=True, single_context=False, no_bo
 
 def check_for_errors(args, pretrain=False, **kwargs):
     if pretrain:
-        if checkattr(args, 'augment') and not args.experiment in ('CIFAR10', 'CIFAR100'):
-            raise ValueError("Augmentation is only supported for 'CIFAR10' or 'CIFAR-100'.")
+        if checkattr(args, 'augment') and not args.experiment in ('CIFAR10', 'CIFAR100', 'TinyImageNet'):
+            raise ValueError("Augmentation is only supported for 'CIFAR10', 'CIFAR-100' or 'TinyImageNet'.")
     if not pretrain:
         if (checkattr(args, 'separate_networks') or checkattr(args, 'xdg')) and (not args.scenario == "task"):
             raise ValueError("'XdG' or 'SeparateNetworks' can only be used with --scenario='task'.")

@@ -81,7 +81,7 @@ def add_eval_options(parser, main=False, comparison=False, pretrain=False, compa
 
 def add_problem_options(parser, pretrain=False, no_boundaries=False, **kwargs):
     problem_params = parser.add_argument_group('Problem Specification')
-    cl_protocols = ['splitMNIST', 'permMNIST', 'CIFAR10', 'CIFAR100']
+    cl_protocols = ['splitMNIST', 'permMNIST', 'CIFAR10', 'CIFAR100', 'TinyImageNet']
     problem_params.add_argument('--experiment', type=str, default='CIFAR10' if pretrain else 'splitMNIST',
                             choices=['CIFAR10', 'CIFAR100', 'MNIST', 'MNIST32'] if pretrain else cl_protocols)
     if no_boundaries:
@@ -115,7 +115,8 @@ def add_model_options(parser, pretrain=False, compare_replay=False, **kwargs):
     # 'Convenience-commands' that select the defaults for specific architectures
     model.add_argument('--reducedResNet', action='store_true', help="select defaults for 'Reduced ResNet-18' (e.g., as in Hess et al, 2023)")
     # -convolutional layers
-    model.add_argument('--conv-type', type=str, default="standard", choices=["standard", "resNet"])
+    model.add_argument('--conv-type', type=str, default="standard",
+                       choices=["standard", "resNet", "resNet18", "resnet18", "tv_resnet18"])
     model.add_argument('--n-blocks', type=int, default=2, help="# blocks per conv-layer (only for 'resNet')")
     model.add_argument('--depth', type=int, default=None, help="# of convolutional layers (0 = only fc-layers)")
     model.add_argument('--reducing-layers', type=int, dest='rl', default=None,

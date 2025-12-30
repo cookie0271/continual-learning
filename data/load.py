@@ -14,7 +14,8 @@ def get_dataset(name, type='train', download=True, capacity=None, permutation=No
     dataset_class = AVAILABLE_DATASETS[data_name]
 
     # specify image-transformations to be applied
-    transforms_list = [*AVAILABLE_TRANSFORMS['augment']] if augment else []
+    augment_key = f"{name}_augment" if f"{name}_augment" in AVAILABLE_TRANSFORMS else 'augment'
+    transforms_list = [*AVAILABLE_TRANSFORMS[augment_key]] if augment else []
     transforms_list += [*AVAILABLE_TRANSFORMS[name]]
     if normalize:
         transforms_list += [*AVAILABLE_TRANSFORMS[name+"_norm"]]
@@ -79,6 +80,8 @@ def get_context_set(name, scenario, contexts, data_dir="./datasets", only_config
         data_type = 'CIFAR10'
     elif name == "CIFAR100":
         data_type = 'CIFAR100'
+    elif name == "TinyImageNet":
+        data_type = 'TinyImageNet'
     else:
         raise ValueError('Given undefined experiment: {}'.format(name))
 
@@ -89,9 +92,10 @@ def get_context_set(name, scenario, contexts, data_dir="./datasets", only_config
 
     # Get config-dict
     config = DATASET_CONFIGS[data_type].copy()
-    config['normalize'] = normalize if name=='CIFAR100' else False
+    config['normalize'] = normalize if data_type in ("CIFAR10", "CIFAR100", "TinyImageNet") else False
     if config['normalize']:
-        config['denormalize'] = AVAILABLE_TRANSFORMS["CIFAR100_denorm"]
+        denorm_key = f"{data_type}_denorm"
+        config['denormalize'] = AVAILABLE_TRANSFORMS[denorm_key]
     config['adversarial_label_shuffle'] = adversarial_label_shuffle
     # check for number of contexts
     if contexts > config['classes'] and not name=="permMNIST":
@@ -136,13 +140,16 @@ def get_context_set(name, scenario, contexts, data_dir="./datasets", only_config
     else:
         # prepare permutation to shuffle label-ids (to create different class batches for each random seed)
         classes = config['classes']
-        perm_class_list = np.array(list(range(classes))) if exception else np.random.permutation(list(range(classes)))
+        if name == "TinyImageNet":
+            perm_class_list = np.array(list(range(classes)))
+        else:
+            perm_class_list = np.array(list(range(classes))) if exception else np.random.permutation(list(range(classes)))
         target_transform = transforms.Lambda(lambda y, p=perm_class_list: int(p[y]))
         # prepare train and test datasets with all classes
         trainset = get_dataset(data_type, type="train", dir=data_dir, target_transform=target_transform,
                                verbose=verbose, augment=augment, normalize=normalize)
         testset = get_dataset(data_type, type="test", dir=data_dir, target_transform=target_transform, verbose=verbose,
-                              augment=augment, normalize=normalize)
+                              augment=False, normalize=normalize)
         # generate labels-per-dataset (if requested, training data is split up per class rather than per context)
         labels_per_dataset_train = [[label] for label in range(classes)] if train_set_per_class else [
             list(np.array(range(classes_per_context)) + classes_per_context * context_id)
