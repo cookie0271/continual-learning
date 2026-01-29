@@ -477,12 +477,10 @@ def run(args, verbose=False):
                     test_size=args.acc_n)
     ] if (not checkattr(args, 'prototypes')) and (not checkattr(args, 'gen_classifier')) else [None]
     # -after each context, for plotting in pdf (when using prototypes / generative classifier, this is also for visdom)
-    eval_matrix = []
     context_cbs = [
         cb._eval_cb(log=args.iters, test_datasets=test_datasets, plotting_dict=plotting_dict,
                     visdom=visdom if checkattr(args, 'prototypes') or checkattr(args, 'gen_classifier') else None,
-                    iters_per_context=args.iters, test_size=args.acc_n, S=args.eval_s if hasattr(args, 'eval_s') else 1,
-                    force_eval=True, verbose=verbose, eval_matrix=eval_matrix)
+                    iters_per_context=args.iters, test_size=args.acc_n, S=args.eval_s if hasattr(args, 'eval_s') else 1)
     ]
 
     #-------------------------------------------------------------------------------------------------#
@@ -550,10 +548,6 @@ def run(args, verbose=False):
             ) else "{}-{}".format(model.name, args.full_stag)
             utils.save_checkpoint(model, args.m_dir, name=save_name, verbose=verbose)
 
-        if eval_matrix:
-            print("\nEvaluation matrix (accuracy * 100 after each context):")
-            for row in eval_matrix:
-                print(row)
 
     else:
         # Load previously trained model(s) (if goal is to only evaluate previously trained model)

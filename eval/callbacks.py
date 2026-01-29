@@ -32,7 +32,7 @@ def _sample_cb(log, config, visdom=None, test_datasets=None, sample_size=64):
 
 
 def _eval_cb(log, test_datasets, visdom=None, plotting_dict=None, iters_per_context=None, test_size=None,
-             summary_graph=True, S='mean', force_eval=False, verbose=False, eval_matrix=None):
+             summary_graph=True, S='mean'):
     '''Initiates function for evaluating performance of classifier (in terms of accuracy).
 
     [test_datasets]       <list> of <Datasets>; also if only 1 context, it should be presented as a list!
@@ -43,34 +43,20 @@ def _eval_cb(log, test_datasets, visdom=None, plotting_dict=None, iters_per_cont
 
         iteration = batch if (context is None or context==1) else (context-1)*iters_per_context + batch
 
-        should_eval = force_eval or (iteration % log == 0)
-
         # Evaluate the classifier every [log] iterations
-        if should_eval:
+        if iteration % log == 0:
 
             # If needed, set the requested way of doing inference as attributes of the classifier
             if (S is not None) and hasattr(classifier, 'S'):
                 classifier.S = S
 
-            if force_eval and verbose:
-                print("\nEvaluation after context {} (iteration {})".format(context, iteration))
-
             # Evaluate the classifier on multiple contexts (and log to visdom)
-            eval_result = evaluate.test_all_so_far(
-                classifier, test_datasets, context, iteration, test_size=test_size,
-                visdom=visdom, summary_graph=summary_graph, plotting_dict=plotting_dict,
-                verbose=verbose, return_all=eval_matrix is not None,
-            )
-            if eval_matrix is not None and eval_result is not None:
-                precs, _ = eval_result
-                row = [0.0 for _ in range(len(test_datasets))]
-                for index, prec in enumerate(precs):
-                    row[index] = round(prec * 100, 1)
-                eval_matrix.append(row)
+            evaluate.test_all_so_far(classifier, test_datasets, context, iteration, test_size=test_size,
+                                     visdom=visdom, summary_graph=summary_graph, plotting_dict=plotting_dict)
 
-        ## Return the callback-function (except if visdom is not selected!)
+    ## Return the callback-function (except if visdom is not selected!)
+    return eval_cb if (visdom is not None) or (plotting_dict is not None) else None
 
-    return eval_cb if (visdom is not None) or (plotting_dict is not None) or force_eval else None
 
 ##------------------------------------------------------------------------------------------------------------------##
 
